@@ -7,6 +7,7 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
@@ -214,8 +215,8 @@ os.environ["CATALOG_DB"] = str(DB)
 sys.path.insert(0, str(BACKEND))
 import main as api_main
 
-assert api_main.media_url(virt_a1111) == ""
-assert api_main.media_url(solta) == "/media/" + solta.lstrip("/")
+assert api_main.media_url(virt_a1111) == "/media/" + quote(virt_a1111.lstrip("/"))
+assert api_main.media_url(solta) == "/media/" + quote(solta.lstrip("/"))
 
 con.close()
 print("TODOS OS TESTES DE ZIP PASSARAM")

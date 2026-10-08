@@ -3,14 +3,19 @@
 
 from __future__ import annotations
 
+import io
+import mimetypes
 import os
 import sqlite3
+import zipfile
 from contextlib import closing
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 import init_db
@@ -37,8 +42,6 @@ def db() -> sqlite3.Connection:
 
 
 def media_url(file_path: str) -> str:
-    if "::" in file_path:
-        return ""
     try:
         rel = Path(file_path).relative_to(MEDIA_ROOT)
     except ValueError:
@@ -118,7 +121,55 @@ def search(
     return {"q": q, "total": total, "limit": limit, "offset": offset, "items": items}
 
 
-app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
+MEDIA_TYPES = {
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+}
+CHUNK_SIZE = 64 * 1024
+
+
+def iter_chunks(buffer: io.BytesIO):
+    while True:
+        chunk = buffer.read(CHUNK_SIZE)
+        if not chunk:
+            return
+        yield chunk
+
+
+class CatalogFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        if "::" not in path:
+            return await super().get_response(path, scope)
+        try:
+            buffer, media_type = await run_in_threadpool(self.load_member, path)
+        except (OSError, zipfile.BadZipFile, RuntimeError, KeyError, ValueError):
+            return Response(status_code=404)
+        size = buffer.getbuffer().nbytes
+        buffer.seek(0)
+        return StreamingResponse(
+            iter_chunks(buffer),
+            media_type=media_type,
+            headers={"Content-Length": str(size)},
+        )
+
+    def load_member(self, path: str) -> tuple[io.BytesIO, str]:
+        zip_rel, _, internal = path.partition("::")
+        base = str(MEDIA_ROOT.resolve())
+        full_zip = os.path.realpath(os.path.join(base, zip_rel.lstrip("/")))
+        if not full_zip.startswith(base.rstrip("/") + "/"):
+            raise ValueError("caminho fora da raiz")
+        with zipfile.ZipFile(full_zip) as zf:
+            with zf.open(internal) as member:
+                buffer = io.BytesIO(member.read())
+        suffix = Path(internal).suffix.lower()
+        media_type = MEDIA_TYPES.get(suffix) or mimetypes.guess_type(internal)[0]
+        return buffer, media_type or "application/octet-stream"
+
+
+app.mount("/media", CatalogFiles(directory=str(MEDIA_ROOT)), name="media")
 
 
 if __name__ == "__main__":

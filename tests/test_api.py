@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import shutil
@@ -7,6 +8,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from urllib.parse import quote
 
@@ -62,6 +64,12 @@ def build_fixtures():
     sub.mkdir()
     save_png(sub / WEIRD)
 
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), (0, 0, 255)).save(buf, "PNG")
+    with zipfile.ZipFile(ROOT / "pacote.zip", "w") as zf:
+        zf.writestr("dentro.png", buf.getvalue())
+    return buf.getvalue()
+
 
 def run_cli(script, *args):
     r = subprocess.run(
@@ -86,7 +94,7 @@ def fetch_json(path):
     return status, dict(headers), json.loads(body)
 
 
-build_fixtures()
+zip_bytes = build_fixtures()
 run_cli("scanner.py", str(ROOT), "--db", str(DB))
 run_cli("extractor.py", "--db", str(DB))
 
@@ -128,7 +136,7 @@ try:
     data = json.loads(body)
     assert status == 200
     assert headers.get("access-control-allow-origin") == "*", dict(headers)
-    assert data["total"] == 4 and data["limit"] == 2 and data["offset"] == 0
+    assert data["total"] == 5 and data["limit"] == 2 and data["offset"] == 0
     assert len(data["items"]) == 2
     item = data["items"][0]
     assert set(item) == {"id", "file_name", "file_size", "file_path", "media_url"}
@@ -137,13 +145,19 @@ try:
     _, _, data_b = fetch_json("/images?limit=2&offset=2")
     assert len(data_b["items"]) == 2
     _, _, data_c = fetch_json("/images?limit=2&offset=4")
-    assert data_c["items"] == []
-    all_ids = [it["id"] for it in data["items"]] + [it["id"] for it in data_b["items"]]
-    assert sorted(all_ids) == [1, 2, 3, 4]
+    assert len(data_c["items"]) == 1
+    _, _, data_d = fetch_json("/images?limit=2&offset=6")
+    assert data_d["items"] == []
+    all_ids = (
+        [it["id"] for it in data["items"]]
+        + [it["id"] for it in data_b["items"]]
+        + [it["id"] for it in data_c["items"]]
+    )
+    assert sorted(all_ids) == [1, 2, 3, 4, 5]
 
     _, _, full = fetch_json("/images?limit=500")
     items = full["items"]
-    assert full["total"] == 4
+    assert full["total"] == 5
 
     status, headers, _ = fetch(
         "/images",
@@ -204,6 +218,29 @@ try:
     status, _, body = fetch(weird["media_url"])
     assert status == 200, weird["media_url"]
     assert body == (ROOT / "sub" / WEIRD).read_bytes()
+
+    # 6) streaming de membro de ZIP (INV-12): 200 + bytes reais, 404 limpo nos erros
+    zip_item = next(it for it in items if "::" in it["file_path"])
+    assert zip_item["media_url"] == "/media/" + quote(zip_item["file_path"].lstrip("/"))
+    status, _, zip_detail = fetch_json(f"/images/{zip_item['id']}")
+    assert status == 200
+    assert zip_detail["media_url"] == zip_item["media_url"]
+
+    status, headers, body = fetch(zip_item["media_url"])
+    assert status == 200
+    assert headers.get_content_type() == "image/png"
+    assert body == zip_bytes
+
+    status, _, _ = fetch(zip_item["media_url"].replace("dentro.png", "nao_existe.png"))
+    assert status == 404
+
+    (ROOT / "pacote.zip").write_bytes(b"isto nao e um zip")
+    status, _, _ = fetch(zip_item["media_url"])
+    assert status == 404
+
+    os.remove(ROOT / "pacote.zip")
+    status, _, _ = fetch(zip_item["media_url"])
+    assert status == 404
 
     print("TODOS OS TESTES DA API PASSARAM")
 finally:
