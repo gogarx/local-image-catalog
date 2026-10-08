@@ -1,0 +1,18 @@
+# Cache de execução do Python (Gerado automaticamente ao rodar os testes)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Ambientes Virtuais locais
+.venv/
+node_modules/
+
+# Bancos de dados locais e temporários de teste (Não commite o banco real)
+backend/catalog.db
+backend/catalog.db-wal
+backend/catalog.db-shm
+tests/test_catalog.db
+tests/test_catalog.db-wal
+tests/test_catalog.db-shm
