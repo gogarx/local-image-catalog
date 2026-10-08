@@ -1,0 +1,127 @@
+#!/usr/bin/env python3
+"""API FastAPI do local-image-catalog: galeria, detalhes, busca FTS e mídia local."""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+from urllib.parse import quote
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+import init_db
+
+DB_PATH = Path(os.environ.get("CATALOG_DB", init_db.DEFAULT_DB_PATH))
+MEDIA_ROOT = Path(os.environ.get("CATALOG_MEDIA_ROOT", "/"))
+
+init_db.init_db(DB_PATH)
+
+app = FastAPI(title="local-image-catalog", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def db() -> sqlite3.Connection:
+    con = sqlite3.connect(DB_PATH, timeout=5.0)
+    con.row_factory = sqlite3.Row
+    return con
+
+
+def media_url(file_path: str) -> str:
+    if "::" in file_path:
+        return ""
+    try:
+        rel = Path(file_path).relative_to(MEDIA_ROOT)
+    except ValueError:
+        return ""
+    return "/media/" + quote(rel.as_posix())
+
+
+@app.get("/images")
+def list_images(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    with closing(db()) as con:
+        total = con.execute("SELECT count(*) FROM images").fetchone()[0]
+        rows = con.execute(
+            "SELECT id, file_name, file_size, file_path FROM images"
+            " ORDER BY id LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+    items = [{**dict(row), "media_url": media_url(row["file_path"])} for row in rows]
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/images/{image_id}")
+def image_detail(image_id: int):
+    with closing(db()) as con:
+        row = con.execute(
+            "SELECT i.id, i.file_path, i.file_name, i.file_size, i.mtime, i.indexed_at,"
+            " t.image_id, t.prompt_positivo, t.prompt_negativo, t.workflow_json"
+            " FROM images AS i"
+            " JOIN images_text AS t ON t.rowid = i.id"
+            " WHERE i.id = ?",
+            (image_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="imagem não encontrada")
+        tags = [
+            r[0]
+            for r in con.execute(
+                "SELECT tag FROM image_tags WHERE image_id = ? ORDER BY tag",
+                (image_id,),
+            )
+        ]
+    data = dict(row)
+    data["media_url"] = media_url(data["file_path"])
+    data["tags"] = tags
+    return data
+
+
+@app.get("/search")
+def search(
+    q: str = Query(min_length=1),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    with closing(db()) as con:
+        try:
+            total = con.execute(
+                "SELECT count(*) FROM images_text(?) AS t", (q,)
+            ).fetchone()[0]
+            rows = con.execute(
+                "SELECT i.id, i.file_name, i.file_size, i.file_path, t.prompt_positivo"
+                " FROM images_text(?) AS t"
+                " JOIN images AS i ON i.id = t.rowid"
+                " ORDER BY t.rank"
+                " LIMIT ? OFFSET ?",
+                (q, limit, offset),
+            ).fetchall()
+        except sqlite3.OperationalError as err:
+            msg = str(err).lower()
+            if "fts5" in msg or "unterminated string" in msg or "unknown special query" in msg:
+                raise HTTPException(
+                    status_code=400, detail=f"consulta FTS inválida: {err}"
+                ) from err
+            raise
+    items = [{**dict(row), "media_url": media_url(row["file_path"])} for row in rows]
+    return {"q": q, "total": total, "limit": limit, "offset": offset, "items": items}
+
+
+app.mount("/media", StaticFiles(directory=str(MEDIA_ROOT)), name="media")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("CATALOG_PORT", "8000")))
