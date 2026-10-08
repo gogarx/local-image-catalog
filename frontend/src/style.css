@@ -1,0 +1,24 @@
+@import "tailwindcss";
+
+@theme {
+  --color-tokyo-bg: #1a1b26;
+  --color-tokyo-bg-deep: #16161e;
+  --color-tokyo-surface: #1f2335;
+  --color-tokyo-overlay: #292e42;
+  --color-tokyo-border: #3b4261;
+  --color-tokyo-fg: #c0caf5;
+  --color-tokyo-dim: #565f89;
+  --color-tokyo-blue: #7aa2f7;
+  --color-tokyo-cyan: #7dcfff;
+  --color-tokyo-purple: #bb9af7;
+  --color-tokyo-green: #9ece6a;
+  --color-tokyo-yellow: #e0af68;
+  --color-tokyo-red: #f7768e;
+  --color-tokyo-orange: #ff9e64;
+}
+
+body {
+  background-color: var(--color-tokyo-bg);
+  color: var(--color-tokyo-fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
