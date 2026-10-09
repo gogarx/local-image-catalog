@@ -93,7 +93,7 @@ con = sqlite3.connect(DB)
 con.row_factory = sqlite3.Row
 assert con.execute("SELECT count(*) FROM images").fetchone()[0] == 1
 assert con.execute("SELECT prompt_positivo FROM images_text WHERE rowid=1").fetchone()[0] == "um gato laranja na praia ao entardecer"
-assert con.execute("PRAGMA user_version").fetchone()[0] == 2
+assert con.execute("PRAGMA user_version").fetchone()[0] == 3
 assert con.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 CHECK = """
@@ -131,6 +131,20 @@ try:
     raise AssertionError("PK composta de image_tags deveria ter falhado")
 except sqlite3.IntegrityError:
     pass
+assert (
+    con.execute("SELECT source FROM image_tags WHERE image_id = 1 AND tag = '1girl'").fetchone()[0]
+    == "tagger"
+)
+con.execute(
+    "INSERT OR IGNORE INTO image_tags (image_id, tag, source) VALUES (1, 'horns', 'space_api')"
+)
+con.execute(
+    "INSERT OR IGNORE INTO image_tags (image_id, tag, source) VALUES (1, 'horns', 'tagger')"
+)
+assert (
+    con.execute("SELECT source FROM image_tags WHERE image_id = 1 AND tag = 'horns'").fetchone()[0]
+    == "space_api"
+)
 con.execute("DELETE FROM images WHERE id = 1")
 con.commit()
 assert con.execute("SELECT count(*) FROM image_tags").fetchone()[0] == 0

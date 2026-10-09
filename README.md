@@ -41,8 +41,8 @@ API HTTP somente leitura:
   StreamingResponse com o media_type correto.
 
 Pipeline CLI (os únicos escritores do banco): init_db.py, scanner.py,
-extractor.py e tagger.py — todos idempotentes, podem rodar quantas vezes
-quiser.
+extractor.py, tagger.py e space_tagger.py (opcional, via rede) — todos
+idempotentes, podem rodar quantas vezes quiser.
 
 ### Frontend — Vue 3 + Vite + Tailwind CSS 4 (frontend/)
 
@@ -64,7 +64,7 @@ arquivo .env.development e o build de produção usa rotas relativas.
 ```
 cd backend
 python3 -m venv .venv
-.venv/bin/pip install fastapi uvicorn pillow
+.venv/bin/pip install fastapi uvicorn pillow gradio_client
 
 cd ../frontend
 npm install
@@ -107,13 +107,21 @@ chaves do yandere-masonry e cruza com os prompts):
 python tagger.py
 ```
 
-5. Subir a API HTTP (docs automáticas em http://127.0.0.1:8000/docs):
+5. Categorizar imagens sem nenhuma tag via o Space WD-Tagger do Hugging
+Face (opcional; requer rede e respeita o rate limit com pausa de 5 segundos
+por imagem):
+
+```
+python space_tagger.py
+```
+
+6. Subir a API HTTP (docs automáticas em http://127.0.0.1:8000/docs):
 
 ```
 uvicorn main:app --host 127.0.0.1 --port 8000
 ```
 
-6. Iniciar o painel do frontend e abrir http://localhost:5173 no Brave (o
+7. Iniciar o painel do frontend e abrir http://localhost:5173 no Brave (o
 .env.development já aponta a API em http://127.0.0.1:8000):
 
 ```
@@ -139,8 +147,9 @@ Cada suíte termina com um "TODOS OS TESTES ... PASSARAM":
 - tests/test_api.py — endpoints, CORS, /media e streaming de ZIP
 - tests/test_zipflow.py — varredura e extração de membros de ZIP
 - tests/test_tagger.py — dicionário externo e mapeamento de tags
+- tests/test_space_tagger.py — Space WD-Tagger com cliente simulado (sem rede)
 
-O sistema só deve ser considerado estável com as cinco suítes verdes; se
+O sistema só deve ser considerado estável com as seis suítes verdes; se
 qualquer uma falhar, nada foi quebrado por acidente — corrija antes de
 continuar. O contrato completo das regras do banco, dos módulos e da API
 (invariantes INV-01 a INV-13) está no agent.md, que é a fonte da verdade

@@ -15,7 +15,7 @@ muda junto, no mesmo commit.
 | API HTTP | `backend/main.py` (FastAPI + uvicorn; somente leitura — seção 8) |
 | Frontend | `frontend/` (Vue 3 + Vite + Tailwind 4; consome a API — seção 9) |
 | Testes | `tests/` (suites de regressão; rodar com `backend/.venv/bin/python tests/test_*.py`) |
-| Versão do schema | `PRAGMA user_version = 2` (v2: acrescenta `image_tags`, índice `idx_image_tags_tag` e trigger `image_tags_ad`) |
+| Versão do schema | `PRAGMA user_version = 3` (v3: coluna `source` em `image_tags`; v2: tabela + índice `idx_image_tags_tag` + trigger `image_tags_ad`) |
 | Requisito | SQLite compilado com **FTS5** (o script valida e aborta com mensagem clara se faltar) |
 | Natureza | 100% local: o app lê/escreve direto no arquivo, sem servidor nem intermediários |
 
@@ -73,6 +73,7 @@ Notas do FTS5 (comportamento verificado em testes):
 |---|---|---|
 | `image_id` | INTEGER NOT NULL | espelha `images.id` (INV-03) |
 | `tag` | TEXT NOT NULL | termo padronizado (ex.: `1girl`, `long_hair`) |
+| `source` | TEXT NOT NULL DEFAULT 'tagger' | origem do vínculo: `'tagger'` (dicionário local) ou `'space_api'` (Space WD-Tagger) |
 
 - `PRIMARY KEY (image_id, tag)` já deduplica vínculos; o índice
   `idx_image_tags_tag` acelera busca por tag.
@@ -150,15 +151,24 @@ da memória. Regras:
 - ZIP corrompido/ilegível vira "erro" no resumo da varredura, que segue; ZIP
   apagado depois do scan vira "erro" do extrator e a linha permanece
   pendente.
-- Membros de ZIP não são servíveis pelo `/media` (StaticFiles): a API
-  retorna `media_url` vazio e a UI mostra o placeholder.
+- Membros de ZIP são servidos por streaming: `/media` é atendido por
+  `CatalogFiles` (subclasse de `StaticFiles`) — caminho com `::` abre o
+  `.zip` físico com `zipfile`, lê o membro direto para `io.BytesIO` (só RAM,
+  nada extraído para o disco) e responde `StreamingResponse` com o
+  `media_type` correto (`image/png`, `image/webp`). ZIP corrompido, apagado
+  ou membro inexistente → **404 limpo**. `media_url` (presente em `/images`,
+  `/search` e `/images/{id}`) traz a rota já URL-encodeada:
+  `/media/caminho/meu.zip%3A%3Apasta/img.png`.
 
-**INV-13 — `image_tags` é derivada e aditiva.** Tabela derivada de
-`prompt_positivo`: só `backend/tagger.py` escreve nela, sempre com
-`INSERT OR IGNORE` — re-rodar só acrescenta vínculos, nunca duplica. Tags
-não são removidas automaticamente quando o prompt muda; a única remoção
-automática é a cascata da deleção da imagem (`image_tags_ad`). Código de app
-busca por tag via índice (`WHERE tag = ?`) e nunca grava em `image_tags`.
+**INV-13 — `image_tags` é derivada e aditiva.** Tabela derivada dos prompts
+(tagger local) e da visão do Space WD-Tagger (space_tagger): só
+`backend/tagger.py` e `backend/space_tagger.py` escrevem nela, sempre com
+`INSERT OR IGNORE` — re-rodar só acrescenta vínculos, nunca duplica. A
+coluna `source` marca a origem (`'tagger'` ou `'space_api'`) e o primeiro
+que grava vence (OR IGNORE preserva o marcador original). Tags não são
+removidas automaticamente quando o prompt muda; a única remoção automática
+é a cascata da deleção da imagem (`image_tags_ad`). Código de app busca por
+tag via índice (`WHERE tag = ?`) e nunca grava em `image_tags`.
 
 ## 4. Receitas SQL aprovadas (testadas)
 
@@ -285,6 +295,7 @@ python3 backend/init_db.py            (uma vez; os módulos também auto-garante
 python3 backend/scanner.py <pasta>    disco -> tabela images
 python3 backend/extractor.py          images -> textos em images_text
 python3 backend/tagger.py             images_text -> tags em image_tags
+python3 backend/space_tagger.py       images sem tags -> Space WD-Tagger (opcional, requer rede)
 consulta FTS (UI/API, seção 8)        images_text MATCH ... JOIN images ...
 ```
 
@@ -370,7 +381,7 @@ Saída: resumo `{processadas, preenchidas, sem_metadados, erros}`.
 - Nenhum módulo cria/altera schema — isso é exclusivo do `init_db.py`
   (INV-09).
 - Nenhum módulo escreve em `images_text` além do UPDATE do extractor (INV-04),
-  nem em `image_tags` além do tagger (INV-13).
+  nem em `image_tags` além do tagger e do space_tagger (INV-13).
 - `--db` existe para apontar bancos de teste; o padrão é sempre
   `backend/catalog.db`.
 
@@ -392,6 +403,38 @@ Uso: `python3 backend/tagger.py [--db CAMINHO]`
   com placeholders blindados (INV-13). Lotes de 500 commits, como os outros
   módulos. Só `prompt_positivo` gera tags (o negativo é ignorado).
 - Saída: resumo `{chaves, processadas, inseridos}`.
+
+### 7.5 space_tagger.py — tags via Hugging Face Space (opcional, requer rede)
+
+Uso: `python3 backend/space_tagger.py [--db CAMINHO] [--limite N]`
+
+- Alvos: imagens de `images` SEM nenhum registro em `image_tags` (`NOT
+  EXISTS`) — complementa o tagger local, que só marca quem tem prompt.
+- Chamada: `client.predict(image=handle_file(...), model_repo=
+  "SmilingWolf/wd-swinv2-tagger-v3", general_thresh=0.35,
+  general_mcut_enabled=False, character_thresh=0.85,
+  character_mcut_enabled=False, api_name="/predict")` no Space
+  `SmilingWolf/wd-tagger` (gradio_client). Os nomes dos parâmetros mudam
+  sem aviso no Space — `client.view_api()` é a fonte oficial; em erro de
+  parâmetro a imagem vira "erro" e permanece alvo.
+- Retorno atual: tupla `(output_string, rating, characters, tags)` em
+  formato Label do Gradio (`confidences`); o parser pega o bloco de tags
+  gerais (terceiro Label), descarta rating/characters, filtra score > 0.35
+  e normaliza (lowercase, espaços viram `_`). Formatos alternativos (dict
+  com seção `general`, dict plano, string simples) seguem suportados.
+- Caminhos virtuais (INV-12): o membro do ZIP é extraído para um
+  temporário FÍSICO em `/tmp` (`tempfile.mkstemp` com o sufixo original),
+  passado ao `handle_file()` e REMOVIDO imediatamente após a requisição
+  (`finally`) — exceção documentada à regra "nada em disco", com vida útil
+  de uma requisição.
+- Throttling: `time.sleep(5)` após cada imagem processada com sucesso
+  (rate limit do Hugging Face); erros não pausam, apenas contam e a imagem
+  permanece alvo para a próxima execução.
+- Gravação blindada: `INSERT OR IGNORE INTO image_tags (image_id, tag,
+  source) VALUES (?, ?, 'space_api')` (INV-13); commit por imagem preserva
+  o progresso em execuções longas.
+- Sem rede ou Space fora do ar: erros por imagem, a execução segue e o
+  sistema local continua 100% funcional sem esse módulo.
 
 ## 8. API HTTP (main.py) — FastAPI + uvicorn
 
@@ -420,7 +463,7 @@ uvicorn main:app --host 127.0.0.1 --port 8000
 | `GET /images?limit=&offset=` | página da galeria; envelope `{total, limit, offset, items}` — cada item traz `id`, `file_name`, `file_size`, `file_path` e `media_url` (derivado, já URL-encoded). Ordenação fixa `ORDER BY id`; `limit` 1..500 (padrão 50), `offset` >= 0. |
 | `GET /images/{image_id}` | detalhes completos: JOIN `images` ↔ `images_text` por `rowid` (INV-03) — metadados do arquivo + `prompt_positivo`, `prompt_negativo`, `workflow_json`, `image_id`, `media_url` e `tags` (lista alfabética de `image_tags`, INV-13). 404 se não existir. |
 | `GET /search?q=…` | FTS5 pela forma função-de-tabela (`images_text(?)`), ordenado por `rank` (bm25), mesmo envelope paginado de `/images`. Sintaxe FTS inválida → **400** com a mensagem do SQLite. Filtro por coluna: `q=prompt_negativo: borrão`. |
-| `/media/<caminho>` | `StaticFiles` montado na raiz (`CATALOG_MEDIA_ROOT`, padrão `/`): `/media/home/usuario/img.png` serve o arquivo físico direto do disco — é a URL que o `<img>` da galeria consome. Membros de ZIP (INV-12) não são servidos: `media_url` retorna vazio e a UI mostra o placeholder (futura melhoria: rota de streaming de membros). |
+| `/media/<caminho>` | mídia direto da máquina: arquivos físicos via `StaticFiles` montado na raiz (`CATALOG_MEDIA_ROOT`, padrão `/`); caminhos com `::` (membro de ZIP, INV-12) são lidos do `.zip` para `io.BytesIO` e respondidos como `StreamingResponse` com `media_type` correto — nada toca o disco. ZIP corrompido/apagado/membro inexistente → 404. É a URL (encodeada) que o `<img>` da galeria consome. |
 
 Envolucro padrão de listagem (galeria e busca):
 
