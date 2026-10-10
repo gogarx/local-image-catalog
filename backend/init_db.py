@@ -47,6 +47,7 @@ END;
 CREATE TABLE IF NOT EXISTS image_tags (
     image_id INTEGER NOT NULL,
     tag      TEXT NOT NULL,
+    source   TEXT NOT NULL DEFAULT 'tagger',
     PRIMARY KEY (image_id, tag)
 );
 
@@ -96,6 +97,14 @@ def _verify_schema(con: sqlite3.Connection) -> None:
         raise RuntimeError(f"objetos ausentes ou invalidos no schema: {missing}")
 
 
+def _migrate(con: sqlite3.Connection) -> None:
+    columns = {row[1] for row in con.execute("PRAGMA table_info(image_tags)")}
+    if "source" not in columns:
+        con.execute(
+            "ALTER TABLE image_tags ADD COLUMN source TEXT NOT NULL DEFAULT 'tagger'"
+        )
+
+
 def init_db(db_path: Path) -> Path:
     db_path = db_path.expanduser().resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,7 +113,8 @@ def init_db(db_path: Path) -> Path:
     try:
         con.execute("PRAGMA journal_mode = WAL")
         con.executescript(SCHEMA)
-        con.execute("PRAGMA user_version = 2")
+        _migrate(con)
+        con.execute("PRAGMA user_version = 3")
         con.commit()
         _verify_schema(con)
     finally:
@@ -132,9 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Banco pronto: {path}")
     print("  - tabela images (metadados dos arquivos)")
     print("  - tabela virtual FTS5 images_text (busca por texto)")
-    print("  - tabela image_tags (palavras-chave) + indice idx_image_tags_tag")
+    print("  - tabela image_tags (palavras-chave com origem) + indice idx_image_tags_tag")
     print("  - triggers de sincronia: images_ai, images_ad, images_au, image_tags_ad")
-    print("  - journal_mode=WAL, user_version=2")
+    print("  - journal_mode=WAL, user_version=3")
     return 0
 
 
