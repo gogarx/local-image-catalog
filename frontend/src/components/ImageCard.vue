@@ -1,14 +1,18 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { apiUrl } from '../api/client'
 
 const props = defineProps({
   item: { type: Object, required: true },
   active: { type: Boolean, default: false },
+  reveladas: { type: Set, default: () => new Set() },
 })
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'reveal'])
 const failed = ref(false)
 const loaded = ref(false)
+const ofuscada = computed(
+  () => Boolean(props.item.is_nsfw) && !props.reveladas.has(props.item.id),
+)
 </script>
 
 <template>
@@ -27,8 +31,11 @@ const loaded = ref(false)
         :src="apiUrl(props.item.media_url)"
         :alt="props.item.file_name"
         loading="lazy"
-        class="block w-full transition-opacity duration-300"
-        :class="loaded ? 'opacity-100' : 'opacity-0'"
+        class="block w-full transition-all duration-300"
+        :class="[
+          loaded ? 'opacity-100' : 'opacity-0',
+          ofuscada ? 'blur-xl select-none pointer-events-none' : '',
+        ]"
         @load="loaded = true"
         @error="failed = true"
       />
@@ -37,6 +44,23 @@ const loaded = ref(false)
         class="absolute inset-0 flex items-center justify-center p-3"
       >
         <span class="break-all text-center text-xs text-tokyo-dim">{{ props.item.file_name }}</span>
+      </div>
+      <div
+        v-if="ofuscada"
+        class="absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/70 p-2 text-center text-xs"
+        @click.stop
+      >
+        <span class="font-semibold tracking-widest text-tokyo-red">NSFW</span>
+        <span class="mt-1 text-tokyo-dim">Conteúdo sensível</span>
+        <span
+          role="button"
+          tabindex="0"
+          class="mt-2 rounded border border-tokyo-border bg-tokyo-overlay px-2 py-0.5 text-tokyo-fg transition hover:border-tokyo-blue hover:text-tokyo-blue"
+          @click.stop="emit('reveal', props.item.id)"
+          @keydown.enter.stop="emit('reveal', props.item.id)"
+        >
+          Revelar
+        </span>
       </div>
     </div>
     <span

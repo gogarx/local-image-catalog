@@ -9,8 +9,9 @@ const props = defineProps({
   pageCount: { type: Number, default: 1 },
   selectedId: { type: Number, default: null },
   searching: { type: Boolean, default: false },
+  reveladas: { type: Set, default: () => new Set() },
 })
-const emit = defineEmits(['select', 'prev', 'next'])
+const emit = defineEmits(['select', 'prev', 'next', 'reveal'])
 
 const gridRef = ref(null)
 const columnCount = ref(7)
@@ -85,7 +86,9 @@ onBeforeUnmount(() => {
           :key="item.id"
           :item="item"
           :active="item.id === selectedId"
+          :reveladas="reveladas"
           @select="emit('select', $event)"
+          @reveal="emit('reveal', $event)"
         />
       </div>
     </div>

@@ -103,6 +103,10 @@ a1111_id = con.execute(
     "SELECT id FROM images WHERE file_path LIKE '%a1111.png'"
 ).fetchone()[0]
 con.execute("INSERT INTO image_tags (image_id, tag) VALUES (?, '1girl')", (a1111_id,))
+comfy_id = con.execute(
+    "SELECT id FROM images WHERE file_path LIKE '%comfy.png'"
+).fetchone()[0]
+con.execute("INSERT INTO image_tags (image_id, tag) VALUES (?, 'explicit')", (comfy_id,))
 con.commit()
 con.close()
 
@@ -139,8 +143,11 @@ try:
     assert data["total"] == 5 and data["limit"] == 2 and data["offset"] == 0
     assert len(data["items"]) == 2
     item = data["items"][0]
-    assert set(item) == {"id", "file_name", "file_size", "file_path", "media_url"}
+    assert set(item) == {
+        "id", "file_name", "file_size", "file_path", "media_url", "tags", "is_nsfw"
+    }
     assert item["media_url"] == "/media/" + quote(item["file_path"].lstrip("/"))
+    assert isinstance(item["tags"], list) and isinstance(item["is_nsfw"], bool)
 
     _, _, data_b = fetch_json("/images?limit=2&offset=2")
     assert len(data_b["items"]) == 2
@@ -174,6 +181,11 @@ try:
     comfy = next(it for it in items if it["file_path"].endswith("comfy.png"))
     weird = next(it for it in items if "d'água" in it["file_path"])
 
+    # blacklist NSFW: interseção tags ∩ NSFW_BLACKLIST define a flag
+    assert a1111["tags"] == ["1girl"] and a1111["is_nsfw"] is False
+    assert comfy["tags"] == ["explicit"] and comfy["is_nsfw"] is True
+    assert weird["tags"] == [] and weird["is_nsfw"] is False
+
     status, _, detail = fetch_json(f"/images/{a1111['id']}")
     assert status == 200
     assert detail["prompt_positivo"] == "a majestic gato laranja, on the beach at sunset"
@@ -185,9 +197,9 @@ try:
     assert "mtime" in detail and "indexed_at" in detail and "file_size" in detail
     assert detail["tags"] == ["1girl"]
 
-    status, _, comfy_detail = fetch_json(f"/images/{comfy['id']}")
+    status, _, weird_detail = fetch_json(f"/images/{weird['id']}")
     assert status == 200
-    assert comfy_detail["tags"] == []
+    assert weird_detail["tags"] == []
 
     status, _, _ = fetch_json("/images/99999")
     assert status == 404
@@ -197,6 +209,11 @@ try:
     assert sorted(it["file_path"] for it in data["items"]) == sorted(
         [a1111["file_path"], comfy["file_path"]]
     )
+    assert all("tags" in it and "is_nsfw" in it for it in data["items"])
+    search_comfy = next(
+        it for it in data["items"] if it["file_path"] == comfy["file_path"]
+    )
+    assert search_comfy["is_nsfw"] is True and search_comfy["tags"] == ["explicit"]
 
     _, _, data = fetch_json("/search?q=" + quote("borrão"))
     assert data["total"] == 1 and data["items"][0]["file_path"] == comfy["file_path"]

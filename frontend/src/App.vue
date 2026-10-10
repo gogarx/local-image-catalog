@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import SearchBar from './components/SearchBar.vue'
 import ImageGrid from './components/ImageGrid.vue'
 import ImageViewer from './components/ImageViewer.vue'
@@ -18,6 +18,7 @@ const selectedImageId = ref(null)
 const loadingDetail = ref(false)
 const detailError = ref('')
 const detailOpen = ref(false)
+const reveladas = reactive(new Set())
 
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 const searching = computed(() => query.value.trim().length > 0)
@@ -133,6 +134,10 @@ function onTagClick(tag) {
   load()
 }
 
+function revelarImagem(imageId) {
+  reveladas.add(imageId)
+}
+
 function onWheel(event) {
   if (!viewerOpen.value || detailOpen.value) return
   if (event.timeStamp - lastWheel < 200) return
@@ -195,9 +200,11 @@ onUnmounted(() => {
           :page-count="pageCount"
           :selected-id="selectedImageId"
           :searching="searching"
+          :reveladas="reveladas"
           @select="openDetail"
           @prev="goPrev"
           @next="goNext"
+          @reveal="revelarImagem"
         />
       </div>
     </main>

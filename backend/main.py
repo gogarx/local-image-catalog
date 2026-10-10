@@ -22,6 +22,7 @@ import init_db
 
 DB_PATH = Path(os.environ.get("CATALOG_DB", init_db.DEFAULT_DB_PATH))
 MEDIA_ROOT = Path(os.environ.get("CATALOG_MEDIA_ROOT", "/"))
+NSFW_BLACKLIST = {"nsfw", "nudity", "explicit", "breasts", "cleavage", "hentai"}
 
 init_db.init_db(DB_PATH)
 
@@ -49,6 +50,21 @@ def media_url(file_path: str) -> str:
     return "/media/" + quote(rel.as_posix())
 
 
+def build_item(con: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    tags = [
+        r[0].lower()
+        for r in con.execute(
+            "SELECT tag FROM image_tags WHERE image_id = ?", (row["id"],)
+        )
+    ]
+    return {
+        **dict(row),
+        "media_url": media_url(row["file_path"]),
+        "tags": tags,
+        "is_nsfw": bool(set(tags) & NSFW_BLACKLIST),
+    }
+
+
 @app.get("/images")
 def list_images(
     limit: int = Query(default=50, ge=1, le=500),
@@ -61,7 +77,7 @@ def list_images(
             " ORDER BY id LIMIT ? OFFSET ?",
             (limit, offset),
         ).fetchall()
-    items = [{**dict(row), "media_url": media_url(row["file_path"])} for row in rows]
+        items = [build_item(con, row) for row in rows]
     return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
@@ -117,7 +133,7 @@ def search(
                     status_code=400, detail=f"consulta FTS inválida: {err}"
                 ) from err
             raise
-    items = [{**dict(row), "media_url": media_url(row["file_path"])} for row in rows]
+        items = [build_item(con, row) for row in rows]
     return {"q": q, "total": total, "limit": limit, "offset": offset, "items": items}
 
 
